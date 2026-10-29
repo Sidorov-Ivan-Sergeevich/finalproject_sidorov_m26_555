@@ -42,3 +42,12 @@ class ApiRequestError(ValutaTradeError):
         """Store the reason for the API failure."""
         self.reason = reason
         super().__init__(f"Ошибка при обращении к внешнему API: {reason}")
+
+
+class StorageError(ValutaTradeError):
+    """Raised when application data cannot be read or safely saved."""
+
+    def __init__(self, reason: str) -> None:
+        """Store the storage failure reason."""
+        self.reason = reason
+        super().__init__(f"Ошибка хранилища: {reason}")
