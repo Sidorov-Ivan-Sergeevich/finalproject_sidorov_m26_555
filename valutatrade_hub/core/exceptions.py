@@ -51,3 +51,16 @@ class StorageError(ValutaTradeError):
         """Store the storage failure reason."""
         self.reason = reason
         super().__init__(f"Ошибка хранилища: {reason}")
+
+
+class AuthenticationError(ValutaTradeError):
+    """Raised when authentication fails or login is required."""
+
+
+class UserAlreadyExistsError(ValutaTradeError):
+    """Raised when registration uses an existing username."""
+
+    def __init__(self, username: str) -> None:
+        """Store the conflicting username and prepare the message."""
+        self.username = username
+        super().__init__(f"Имя пользователя '{username}' уже занято")
