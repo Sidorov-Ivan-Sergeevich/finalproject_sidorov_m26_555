@@ -1,6 +1,10 @@
 """Shared validation helpers for domain models."""
 
+from collections.abc import Callable, Hashable
+from copy import deepcopy
 from math import isfinite
+from time import monotonic
+from typing import Any
 
 
 def validate_number(
@@ -28,3 +32,42 @@ def validate_number(
         raise ValueError(message)
 
     return number
+
+
+def make_ttl_cache(
+    ttl_seconds: float,
+) -> Callable[[Hashable, Callable[[], Any]], Any]:
+    """Create a closure caching successful loader results for a limited time."""
+    ttl = validate_number(
+        ttl_seconds,
+        field_name="TTL кэша",
+    )
+    cache: dict[Hashable, tuple[float, Any]] = {}
+
+    def get_cached(
+        key: Hashable,
+        loader: Callable[[], Any],
+    ) -> Any:
+        """Return an independent cached value or load and cache a new one."""
+        now = monotonic()
+
+        expired_keys = [
+            cached_key
+            for cached_key, (expires_at, _) in cache.items()
+            if expires_at <= now
+        ]
+
+        for expired_key in expired_keys:
+            del cache[expired_key]
+
+        if key in cache:
+            return deepcopy(cache[key][1])
+
+        value = loader()
+        cache[key] = (
+            monotonic() + ttl,
+            deepcopy(value),
+        )
+        return deepcopy(value)
+
+    return get_cached

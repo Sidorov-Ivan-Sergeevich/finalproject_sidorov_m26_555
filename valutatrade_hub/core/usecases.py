@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from valutatrade_hub.core.currencies import get_currency
+from valutatrade_hub.core.currencies import CryptoCurrency, get_currency
 from valutatrade_hub.core.exceptions import (
     AuthenticationError,
     CurrencyNotFoundError,
@@ -12,7 +12,9 @@ from valutatrade_hub.core.exceptions import (
 from valutatrade_hub.core.models import Portfolio, User, Wallet
 from valutatrade_hub.core.rates import RateService
 from valutatrade_hub.core.utils import validate_number
+from valutatrade_hub.decorators import log_action
 from valutatrade_hub.infra.database import DatabaseManager
+from valutatrade_hub.parser_service.updater import RatesUpdater
 
 
 class AuthService:
@@ -289,6 +291,7 @@ class PortfolioService:
         self._database.update("portfolios", apply_deposit)
         return result
 
+    @log_action("BUY", verbose=True)
     def buy(self, currency_code: str, amount: float) -> dict[str, Any]:
         """Buy currency units by withdrawing their current USD cost."""
         return self._trade(
@@ -297,6 +300,7 @@ class PortfolioService:
             action="BUY",
         )
 
+    @log_action("SELL", verbose=True)
     def sell(self, currency_code: str, amount: float) -> dict[str, Any]:
         """Sell currency units and deposit their current USD value."""
         return self._trade(
@@ -393,3 +397,131 @@ class PortfolioService:
 
         self._database.update("portfolios", apply_trade)
         return result
+
+
+class MarketService:
+    """Provide rate listing, updates, and portfolio valuation for the CLI."""
+
+    def __init__(
+        self,
+        database: DatabaseManager,
+        rates: RateService,
+        updater: RatesUpdater,
+    ) -> None:
+        """Use shared cache, conversion, and parser services."""
+        self._database = database
+        self._rates = rates
+        self._updater = updater
+
+    def get_rate(self, from_code: str, to_code: str):
+        """Return a conversion quote using the core rate service."""
+        return self._rates.get_rate(from_code, to_code)
+
+    def update_rates(self, source: str | None = None) -> dict[str, Any]:
+        """Request an explicit external rate update."""
+        return self._updater.run_update(source)
+
+    def show_rates(
+        self,
+        *,
+        currency: str | None = None,
+        base: str = "USD",
+        top: int | None = None,
+    ) -> dict[str, Any]:
+        """Return available fresh quotes and report unavailable currencies."""
+        base_code = get_currency(base).code
+
+        if top is not None and top <= 0:
+            raise ValueError("'top' должен быть положительным целым числом")
+
+        document = self._database.read("rates")
+
+        if not document["pairs"]:
+            raise ApiRequestError("Локальный кеш курсов пуст. Выполните update-rates.")
+
+        if currency is not None:
+            codes = [get_currency(currency).code]
+        else:
+            codes = sorted(
+                {
+                    key.split("_")[0]
+                    for key in document["pairs"]
+                    if isinstance(key, str) and len(key.split("_")) == 2
+                }
+            )
+
+        quotes = []
+        warnings = []
+
+        for code in codes:
+            try:
+                model = get_currency(code)
+
+                if top is not None and not isinstance(
+                    model,
+                    CryptoCurrency,
+                ):
+                    continue
+
+                quotes.append(self._rates.get_rate(code, base_code))
+            except (ApiRequestError, CurrencyNotFoundError) as error:
+                if currency is not None:
+                    raise
+                warnings.append(str(error))
+
+        if top is not None:
+            quotes.sort(key=lambda quote: quote.rate, reverse=True)
+            quotes = quotes[:top]
+
+        if not quotes:
+            raise ApiRequestError(
+                "Нет подходящих свежих курсов. Выполните update-rates."
+            )
+
+        return {
+            "quotes": quotes,
+            "warnings": warnings,
+            "last_refresh": document["last_refresh"],
+        }
+
+    def portfolio_info(
+        self,
+        portfolios: PortfolioService,
+        base: str = "USD",
+    ) -> dict[str, Any]:
+        """Calculate display rows and total without placing logic in the CLI."""
+        portfolio = portfolios.get_portfolio()
+        base_code = get_currency(base).code
+        rows = []
+        total = 0.0
+
+        for code, wallet in sorted(portfolio.wallets.items()):
+            if wallet.balance == 0:
+                value = 0.0
+            else:
+                quote = self._rates.get_rate(code, base_code)
+                value = validate_number(
+                    wallet.balance * quote.rate,
+                    field_name="Стоимость кошелька",
+                    allow_zero=True,
+                )
+
+            total = validate_number(
+                total + value,
+                field_name="Стоимость портфеля",
+                allow_zero=True,
+            )
+            rows.append(
+                {
+                    "currency_code": code,
+                    "balance": wallet.balance,
+                    "value": value,
+                }
+            )
+
+        return {
+            "username": portfolio.user.username,
+            "base": base_code,
+            "rows": rows,
+            "total": total,
+        }
