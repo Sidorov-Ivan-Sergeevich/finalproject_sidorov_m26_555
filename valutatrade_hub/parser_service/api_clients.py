@@ -112,9 +112,23 @@ class CoinGeckoClient(BaseApiClient):
     def fetch_rates(self) -> dict[str, float]:
         """Return supported cryptocurrency prices in USD."""
         headers = {}
+        api_key = self.config.coingecko_api_key
 
-        if self.config.coingecko_api_key:
-            headers["x-cg-demo-api-key"] = self.config.coingecko_api_key
+        if api_key:
+            api_key = api_key.strip()
+
+            if (
+                not api_key
+                or not api_key.isascii()
+                or any(character.isspace() for character in api_key)
+            ):
+                raise ApiRequestError(
+                    "CoinGecko: некорректный формат COINGECKO_API_KEY. "
+                    "Укажите настоящий Demo API-ключ без пробелов "
+                    "или удалите переменную для запроса без ключа."
+                )
+
+            headers["x-cg-demo-api-key"] = api_key
 
         payload, metadata = self._request(
             self.config.coingecko_url,

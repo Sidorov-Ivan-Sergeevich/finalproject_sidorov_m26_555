@@ -4,6 +4,7 @@ from typing import Any
 
 from valutatrade_hub.core.currencies import CryptoCurrency, get_currency
 from valutatrade_hub.core.exceptions import (
+    ApiRequestError,
     AuthenticationError,
     CurrencyNotFoundError,
     StorageError,
